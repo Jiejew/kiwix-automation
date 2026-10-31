@@ -20,78 +20,104 @@ jobs:
 
     steps:
       - name: Prepare directories
-        run: mkdir -p output release
+        run: mkdir -p site release
 
-      - name: Build Hyprland Wiki ZIM
+      - name: Install image tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y imagemagick
+
+      - name: Mirror Hyprland documentation
         shell: bash
         run: |
           set -euo pipefail
 
-          SEEDS="https://wiki.hypr.land/0.56.0/,https://wiki.hypr.land/0.56.0/Configuring/Basics/Monitors/,https://wiki.hypr.land/0.56.0/Configuring/Basics/Variables/,https://wiki.hypr.land/0.56.0/Configuring/Basics/Window-Rules/"
+          wget \
+            --recursive \
+            --level=inf \
+            --no-parent \
+            --no-host-directories \
+            --page-requisites \
+            --convert-links \
+            --adjust-extension \
+            --domains wiki.hypr.land \
+            --wait=0.2 \
+            --tries=3 \
+            --timeout=30 \
+            --directory-prefix=site \
+            https://wiki.hypr.land/0.56.0/
 
+      - name: Validate downloaded pages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base="site/0.56.0"
+          test -s "$base/index.html"
+
+          count=$(find "$base" -type f \
+            -name 'index.html' | wc -l)
+
+          echo "Downloaded HTML pages: $count"
+          test "$count" -ge 30
+
+          for page in \
+            "Configuring/Basics/Monitors" \
+            "Configuring/Basics/Variables" \
+            "Configuring/Basics/Window-Rules"
+          do
+            test -s "$base/$page/index.html" || {
+              echo "Missing: $page"
+              exit 1
+            }
+          done
+
+      - name: Prepare illustration
+        run: |
+          curl -fL \
+            https://wiki.hypr.land/0.56.0/apple-touch-icon.png \
+            -o icon.png
+
+          convert icon.png \
+            -resize '48x48!' \
+            site/illustration.png
+
+      - name: Build ZIM
+        run: |
           docker run --rm \
-            --shm-size=2g \
-            -v "$PWD/output:/output" \
-            ghcr.io/openzim/zimit:latest zimit \
-            --seeds "$SEEDS" \
-            --name hyprland_wiki_056 \
-            --title "Hyprland Wiki 0.56" \
-            --description "Offline Hyprland 0.56 documentation" \
-            --scopeType prefix \
-            --waitUntil domcontentloaded \
-            --pageLimit 400 \
-            --workers 2
+            -v "$PWD:/work" \
+            ghcr.io/openzim/zim-tools:latest \
+            zimwriterfs \
+            --welcome=0.56.0/index.html \
+            --illustration=illustration.png \
+            --language=eng \
+            --name=hyprland_wiki_056 \
+            --title="Hyprland Wiki 0.56" \
+            --description="Hyprland 0.56 documentation" \
+            --longDescription="Offline documentation for the Hyprland Wayland compositor, version 0.56." \
+            --creator=Hyprland \
+            --publisher=Jiejew \
+            --source=https://wiki.hypr.land/0.56.0/ \
+            /work/site \
+            /work/release/hyprland_wiki.zim
 
-      - name: Prepare ZIM
+      - name: Validate ZIM
         shell: bash
         run: |
           set -euo pipefail
 
-          zim="$(find output -type f -name '*.zim' -print -quit)"
-          test -n "$zim"
-
-          cp "$zim" release/hyprland_wiki.zim
-
-          ls -lh release/hyprland_wiki.zim
-
-      - name: Validate captured articles
-        shell: bash
-        run: |
-          set -euo pipefail
+          test -s release/hyprland_wiki.zim
 
           docker run --rm \
             -v "$PWD/release:/work:ro" \
             ghcr.io/openzim/zim-tools:latest \
-            zimdump list /work/hyprland_wiki.zim \
-            > release/zim-index.txt
+            zimdump info /work/hyprland_wiki.zim
 
-          count=$(grep -c '^wiki.hypr.land/0.56.0/' \
-            release/zim-index.txt || true)
-
-          echo "Captured paths: $count"
-
-          test "$count" -ge 30
-
-          for page in \
-            "Configuring/Basics/Monitors/" \
-            "Configuring/Basics/Variables/" \
-            "Configuring/Basics/Window-Rules/"
-          do
-            grep -Fq "wiki.hypr.land/0.56.0/$page" \
-              release/zim-index.txt || {
-                echo "Missing article: $page"
-                exit 1
-              }
-          done
-
-          echo "ZIM content validation passed"
-
-      - name: Generate checksum
-        shell: bash
-        run: |
           cd release
           sha256sum hyprland_wiki.zim \
             > hyprland_wiki.zim.sha256
+
+          ls -lh
 
       - name: Publish GitHub Release
         env:
@@ -100,12 +126,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          tag="hyprland-056-$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          tag="hyprland-056-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
 
           gh release create "$tag" \
             release/hyprland_wiki.zim \
             release/hyprland_wiki.zim.sha256 \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Hyprland Wiki 0.56 $(date -u +%F)" \
-            --notes "Validated offline Hyprland 0.56 documentation" \
+            --title="Hyprland Wiki 0.56" \
+            --notes="Offline Hyprland documentation" \
             --latest

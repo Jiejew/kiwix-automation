@@ -22,40 +22,90 @@ jobs:
       - name: Prepare directories
         run: mkdir -p output release
 
-      - name: Build ZIM using Zimit
+      - name: Build Hyprland Wiki ZIM
+        shell: bash
         run: |
+          set -euo pipefail
+
+          SEEDS="https://wiki.hypr.land/0.56.0/,https://wiki.hypr.land/0.56.0/Configuring/Basics/Monitors/,https://wiki.hypr.land/0.56.0/Configuring/Basics/Variables/,https://wiki.hypr.land/0.56.0/Configuring/Basics/Window-Rules/"
+
           docker run --rm \
             --shm-size=2g \
             -v "$PWD/output:/output" \
             ghcr.io/openzim/zimit:latest zimit \
-            --seeds "https://wiki.hypr.land/0.56.0/" \
+            --seeds "$SEEDS" \
             --name hyprland_wiki_056 \
             --title "Hyprland Wiki 0.56" \
+            --description "Offline Hyprland 0.56 documentation" \
             --scopeType prefix \
+            --waitUntil domcontentloaded \
             --pageLimit 400 \
             --workers 2
 
-      - name: Prepare release files
+      - name: Prepare ZIM
         shell: bash
         run: |
           set -euo pipefail
+
           zim="$(find output -type f -name '*.zim' -print -quit)"
           test -n "$zim"
-          test "$(stat -c%s "$zim")" -gt 100000
+
           cp "$zim" release/hyprland_wiki.zim
+
+          ls -lh release/hyprland_wiki.zim
+
+      - name: Validate captured articles
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            -v "$PWD/release:/work:ro" \
+            ghcr.io/openzim/zim-tools:latest \
+            zimdump list /work/hyprland_wiki.zim \
+            > release/zim-index.txt
+
+          count=$(grep -c '^wiki.hypr.land/0.56.0/' \
+            release/zim-index.txt || true)
+
+          echo "Captured paths: $count"
+
+          test "$count" -ge 30
+
+          for page in \
+            "Configuring/Basics/Monitors/" \
+            "Configuring/Basics/Variables/" \
+            "Configuring/Basics/Window-Rules/"
+          do
+            grep -Fq "wiki.hypr.land/0.56.0/$page" \
+              release/zim-index.txt || {
+                echo "Missing article: $page"
+                exit 1
+              }
+          done
+
+          echo "ZIM content validation passed"
+
+      - name: Generate checksum
+        shell: bash
+        run: |
           cd release
-          sha256sum hyprland_wiki.zim > hyprland_wiki.zim.sha256
-          ls -lh
+          sha256sum hyprland_wiki.zim \
+            > hyprland_wiki.zim.sha256
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
+          set -euo pipefail
+
           tag="hyprland-056-$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+
           gh release create "$tag" \
             release/hyprland_wiki.zim \
             release/hyprland_wiki.zim.sha256 \
             --repo "$GITHUB_REPOSITORY" \
             --title "Hyprland Wiki 0.56 $(date -u +%F)" \
-            --notes "Source: https://wiki.hypr.land/0.56.0/ | Generated using openZIM Zimit. Original documentation: hyprwm/hyprland-wiki (BSD-3-Clause)." \
+            --notes "Validated offline Hyprland 0.56 documentation" \
             --latest

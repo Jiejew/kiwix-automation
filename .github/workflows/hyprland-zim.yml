@@ -47,6 +47,58 @@ jobs:
             --directory-prefix=site \
             https://wiki.hypr.land/0.56.0/
 
+
+      - name: Fix CSS filenames and references
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path("site")
+          broken = list(root.rglob("*.css.html"))
+
+          if not broken:
+              raise SystemExit("No .css.html files found; inspect Wget output")
+
+          for old in broken:
+              new = old.with_suffix("")
+              data = old.read_bytes()
+
+              if data.lstrip().lower().startswith(
+                  (b"<!doctype html", b"<html")
+              ):
+                  raise SystemExit(f"HTML instead of CSS: {old}")
+
+              if new.exists():
+                  raise SystemExit(f"Target already exists: {new}")
+
+              old.rename(new)
+              print(f"Fixed: {old} -> {new}")
+
+          changed = 0
+
+          for path in root.rglob("*"):
+              if not path.is_file():
+                  continue
+              if path.suffix.lower() not in (".html", ".css", ".js"):
+                  continue
+
+              original = path.read_bytes()
+              updated = original.replace(b".css.html", b".css")
+
+              if updated != original:
+                  path.write_bytes(updated)
+                  changed += 1
+
+          if list(root.rglob("*.css.html")):
+              raise SystemExit("Unfixed CSS filenames remain")
+
+          print(f"Fixed CSS files: {len(broken)}")
+          print(f"Updated reference files: {changed}")
+          PY
+
+
       - name: Validate downloaded pages
         shell: bash
         run: |

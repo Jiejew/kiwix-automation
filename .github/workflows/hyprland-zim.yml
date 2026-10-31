@@ -1,0 +1,61 @@
+
+name: Build Hyprland Wiki ZIM
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 3 1 * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hyprland-zim
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Prepare directories
+        run: mkdir -p output release
+
+      - name: Build ZIM using Zimit
+        run: |
+          docker run --rm \
+            --shm-size=2g \
+            -v "$PWD/output:/output" \
+            ghcr.io/openzim/zimit:latest zimit \
+            --seeds "https://wiki.hypr.land/0.56.0/" \
+            --name hyprland_wiki_056 \
+            --title "Hyprland Wiki 0.56" \
+            --scopeType prefix \
+            --pageLimit 400 \
+            --workers 2
+
+      - name: Prepare release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          zim="$(find output -type f -name '*.zim' -print -quit)"
+          test -n "$zim"
+          test "$(stat -c%s "$zim")" -gt 100000
+          cp "$zim" release/hyprland_wiki.zim
+          cd release
+          sha256sum hyprland_wiki.zim > hyprland_wiki.zim.sha256
+          ls -lh
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="hyprland-056-$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$tag" \
+            release/hyprland_wiki.zim \
+            release/hyprland_wiki.zim.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Hyprland Wiki 0.56 $(date -u +%F)" \
+            --notes "Source: https://wiki.hypr.land/0.56.0/ | Generated using openZIM Zimit. Original documentation: hyprwm/hyprland-wiki (BSD-3-Clause)." \
+            --latest
